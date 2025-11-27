@@ -1,18 +1,39 @@
 // ==UserScript==
 // @name         Shopify API to MYOB
 // @namespace    http://tampermonkey.net/
-// @version      2.0
-// @description  Fetch data via JSON on Shopify and paste to MYOB
+// @version      3.0
+// @description  Fetch customer data from Shopify orders and paste to MYOB
 // @author       You
 // @match        https://admin.shopify.com/*
 // @match        https://*.myob.com/*
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @run-at       document-idle
+// @updateURL    https://raw.githubusercontent.com/tmm22/shopify-myob/main/shopify-myob.js
+// @downloadURL  https://raw.githubusercontent.com/tmm22/shopify-myob/main/shopify-myob.js
 // ==/UserScript==
 
 (function() {
     'use strict';
+
+    // =========================================================
+    // CONFIGURATION
+    // =========================================================
+    const DEBUG = false; // Set to true to enable console logging
+    const STORAGE_KEY = 'savedCustomerData';
+    
+    // Timing constants (in milliseconds)
+    const TIMING = {
+        ACCORDION_EXPAND: 800,      // Wait for accordions to expand
+        FIELD_FILL_INTERVAL: 150,   // Delay between filling each field
+        COMBOBOX_ARROW_DELAY: 50,   // Delay before pressing arrow down
+        COMBOBOX_ENTER_DELAY: 50,   // Delay before pressing enter
+        EMAIL_FILL_DELAY: 1800,     // Delay before filling email (after all other fields)
+        EMAIL_ENTER_DELAY: 100      // Delay before pressing enter on email
+    };
+
+    // Helper for conditional logging
+    const log = (...args) => { if (DEBUG) console.log('[Shopify-MYOB]', ...args); };
 
     const isShopify = window.location.hostname.includes('shopify');
     const isMYOB = window.location.hostname.includes('myob');
@@ -82,20 +103,12 @@
                     };
 
                     // 4. Save to Tampermonkey storage
-                    GM_setValue('savedShippingAddress', JSON.stringify(addressData));
-                    alert(`Copied Customer Data:
+                    GM_setValue(STORAGE_KEY, JSON.stringify(addressData));
                     
-Name: ${addressData.name}
-Email: ${addressData.email || 'N/A'}
-Phone: ${addressData.phone || 'N/A'}
-
-Billing Address:
-${addressData.billing.street}${addressData.billing.street2 ? ' ' + addressData.billing.street2 : ''}
-${addressData.billing.city}, ${addressData.billing.state} ${addressData.billing.zip}
-
-Shipping Address:
-${addressData.shipping.street}${addressData.shipping.street2 ? ' ' + addressData.shipping.street2 : ''}
-${addressData.shipping.city}, ${addressData.shipping.state} ${addressData.shipping.zip}`);
+                    const billingAddr = `${addressData.billing.street}${addressData.billing.street2 ? ' ' + addressData.billing.street2 : ''}\n${addressData.billing.city}, ${addressData.billing.state} ${addressData.billing.zip}`;
+                    const shippingAddr = `${addressData.shipping.street}${addressData.shipping.street2 ? ' ' + addressData.shipping.street2 : ''}\n${addressData.shipping.city}, ${addressData.shipping.state} ${addressData.shipping.zip}`;
+                    
+                    alert(`Copied Customer Data:\n\nName: ${addressData.name}\nEmail: ${addressData.email || 'N/A'}\nPhone: ${addressData.phone || 'N/A'}\n\nBilling Address:\n${billingAddr}\n\nShipping Address:\n${shippingAddr}`);
 
                 } catch (err) {
                     console.error(err);
@@ -110,13 +123,20 @@ ${addressData.shipping.city}, ${addressData.shipping.state} ${addressData.shippi
     // =========================================================
     if (isMYOB) {
         const pasteHandler = () => {
-            const storedData = GM_getValue('savedShippingAddress');
+            const storedData = GM_getValue(STORAGE_KEY);
             if (!storedData) {
-                alert('No address found in storage.');
+                alert('No address found in storage. Please copy an address from Shopify first.');
                 return;
             }
 
-            const address = JSON.parse(storedData);
+            let address;
+            try {
+                address = JSON.parse(storedData);
+            } catch (err) {
+                alert('Error reading stored data. Please copy the address from Shopify again.');
+                log('JSON parse error:', err);
+                return;
+            }
 
             // Split name into first/last for MYOB
             const nameParts = address.name.split(' ');
@@ -129,22 +149,12 @@ ${addressData.shipping.city}, ${addressData.shipping.state} ${addressData.shippi
 
             // Expand both Billing and Shipping address accordions
             const accordions = document.querySelectorAll('[data-flx-comp="Accordion"]');
-            let billingAccordion = null;
-            let shippingAccordion = null;
-            
             accordions.forEach(accordion => {
                 const heading = accordion.querySelector('[data-flx-comp="Heading"]');
-                if (heading) {
-                    if (heading.textContent.includes('Billing address')) {
-                        billingAccordion = accordion;
-                    } else if (heading.textContent.includes('Shipping address')) {
-                        shippingAccordion = accordion;
-                    }
-                    if (heading.textContent.includes('Billing address') || heading.textContent.includes('Shipping address')) {
-                        const toggleBtn = accordion.querySelector('button[aria-expanded]');
-                        if (toggleBtn && toggleBtn.getAttribute('aria-expanded') === 'false') {
-                            toggleBtn.click();
-                        }
+                if (heading && (heading.textContent.includes('Billing address') || heading.textContent.includes('Shipping address'))) {
+                    const toggleBtn = accordion.querySelector('button[aria-expanded]');
+                    if (toggleBtn && toggleBtn.getAttribute('aria-expanded') === 'false') {
+                        toggleBtn.click();
                     }
                 }
             });
@@ -153,7 +163,7 @@ ${addressData.shipping.city}, ${addressData.shipping.state} ${addressData.shippi
             setTimeout(() => {
                 const dialog = document.querySelector('dialog[open]');
                 if (!dialog) {
-                    console.log('No open dialog found');
+                    log('No open dialog found');
                     return;
                 }
 
@@ -164,7 +174,7 @@ ${addressData.shipping.city}, ${addressData.shipping.state} ${addressData.shippi
                 const postcodeInputs = Array.from(dialog.querySelectorAll('input[name="postcode"]'));
                 const phoneInputs = Array.from(dialog.querySelectorAll('[class*="PhoneNumberList"] input'));
 
-                console.log('Found inputs:', {
+                log('Found inputs:', {
                     street: streetInputs.length,
                     city: cityInputs.length,
                     state: stateInputs.length,
@@ -202,17 +212,17 @@ ${addressData.shipping.city}, ${addressData.shipping.state} ${addressData.shippi
                                     setTimeout(() => {
                                         el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
                                         el.blur();
-                                    }, 50);
-                                }, 50);
+                                    }, TIMING.COMBOBOX_ENTER_DELAY);
+                                }, TIMING.COMBOBOX_ARROW_DELAY);
                             } else {
                                 el.blur();
                             }
-                            console.log(`Filled field ${index}:`, val);
-                        }, index * 150);
+                            log(`Filled field ${index}:`, val);
+                        }, index * TIMING.FIELD_FILL_INTERVAL);
                     }
                 });
 
-                // Fill email LAST (after all fields are done - 9 fields * 150ms + combobox delays + buffer)
+                // Fill email LAST (after all fields are done)
                 setTimeout(() => {
                     if (address.email) {
                         const emailInputs = dialog.querySelectorAll('input[name="email"]');
@@ -225,11 +235,12 @@ ${addressData.shipping.city}, ${addressData.shipping.state} ${addressData.shippi
                                 emailInputs[0].dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
                                 emailInputs[0].dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
                                 emailInputs[0].blur();
-                            }, 100);
+                                log('Email filled');
+                            }, TIMING.EMAIL_ENTER_DELAY);
                         }
                     }
-                }, 1800);
-            }, 800);
+                }, TIMING.EMAIL_FILL_DELAY);
+            }, TIMING.ACCORDION_EXPAND);
         };
 
         // Watch for dialogs opening and add button inside them (not on main page)
@@ -330,16 +341,28 @@ ${addressData.shipping.city}, ${addressData.shipping.state} ${addressData.shippi
             left: isDialog ? '20px' : 'auto',
             bottom: isDialog ? 'auto' : '20px',
             right: isDialog ? 'auto' : '20px',
-            zIndex: '2147483647', // Max z-index
+            zIndex: '2147483647',
             padding: '12px 20px',
-            backgroundColor: '#008060', // Shopify Green
+            backgroundColor: '#008060',
             color: 'white',
             border: 'none',
             borderRadius: '4px',
             cursor: 'pointer',
             boxShadow: '0 2px 5px rgba(0,0,0,0.3)',
-            fontWeight: 'bold'
+            fontWeight: 'bold',
+            transition: 'background-color 0.2s, transform 0.1s'
         });
+        
+        // Hover effects
+        btn.onmouseenter = () => {
+            btn.style.backgroundColor = '#006e52';
+            btn.style.transform = 'scale(1.02)';
+        };
+        btn.onmouseleave = () => {
+            btn.style.backgroundColor = '#008060';
+            btn.style.transform = 'scale(1)';
+        };
+        
         btn.onclick = onClick;
         container.appendChild(btn);
     }
