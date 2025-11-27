@@ -132,6 +132,10 @@
             let address;
             try {
                 address = JSON.parse(storedData);
+                // Validate required properties exist
+                if (!address || !address.billing || !address.shipping) {
+                    throw new Error('Invalid data structure');
+                }
             } catch (err) {
                 alert('Error reading stored data. Please copy the address from Shopify again.');
                 log('JSON parse error:', err);
@@ -139,7 +143,7 @@
             }
 
             // Split name into first/last for MYOB
-            const nameParts = address.name.split(' ');
+            const nameParts = (address.name || '').split(' ');
             const firstName = nameParts[0] || '';
             const lastName = nameParts.slice(1).join(' ') || nameParts[0] || '';
 
@@ -185,17 +189,17 @@
                 // Fill fields sequentially with delays to prevent React overwriting
                 const fillSequence = [
                     // Billing
-                    [streetInputs[0], `${address.billing.street} ${address.billing.street2}`.trim()],
-                    [cityInputs[0], address.billing.city],
+                    [streetInputs[0], `${address.billing.street || ''} ${address.billing.street2 || ''}`.trim()],
+                    [cityInputs[0], address.billing.city || ''],
                     [stateInputs[0], abbreviateState(address.billing.state)],
-                    [postcodeInputs[0], address.billing.zip],
+                    [postcodeInputs[0], address.billing.zip || ''],
                     // Shipping
-                    [streetInputs[1], `${address.shipping.street} ${address.shipping.street2}`.trim()],
-                    [cityInputs[1], address.shipping.city],
+                    [streetInputs[1], `${address.shipping.street || ''} ${address.shipping.street2 || ''}`.trim()],
+                    [cityInputs[1], address.shipping.city || ''],
                     [stateInputs[1], abbreviateState(address.shipping.state)],
-                    [postcodeInputs[1], address.shipping.zip],
+                    [postcodeInputs[1], address.shipping.zip || ''],
                     // Phone
-                    [phoneInputs[0], address.phone]
+                    [phoneInputs[0], address.phone || '']
                 ];
 
                 fillSequence.forEach(([el, val], index) => {
@@ -293,7 +297,7 @@
         if (el) {
             setInputEl(el, value);
         } else {
-            console.log(`Skipped: Could not find ${selector}`);
+            log(`Skipped: Could not find ${selector}`);
         }
     }
 
