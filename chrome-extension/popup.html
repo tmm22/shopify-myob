@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <link rel="stylesheet" href="styles.css">
+    <title>Shopify API to MYOB</title>
+</head>
+<body>
+    <div class="popup">
+        <header>
+            <h1>Shopify API to MYOB</h1>
+            <div class="status-indicator" id="statusIndicator">
+                <span class="status-dot"></span>
+                <span class="status-text">No data stored</span>
+            </div>
+        </header>
+        <main>
+            <div class="data-preview" id="dataPreview">
+                <div class="preview-content">
+                    <p class="no-data">No customer data stored</p>
+                </div>
+            </div>
+            
+            <div class="controls">
+                <label class="debug-toggle">
+                    <input type="checkbox" id="debugMode">
+                    <span class="toggle-text">Debug Mode</span>
+                    <span class="toggle-slider"></span>
+                </label>
+                <button id="clearData" class="btn btn-secondary">Clear All Data</button>
+            </div>
+            
+            <div class="help-section">
+                <h3>How to Use</h3>
+                <div class="steps">
+                    <div class="step">
+                        <strong>Shopify:</strong> Go to any order page and click "Copy Address (API)"
+                    </div>
+                    <div class="step">
+                        <strong>MYOB:</strong> Open "Create Customer" dialog and click "Paste Address"
+                    </div>
+                </div>
+                
+                <div class="troubleshooting">
+                    <h4>Troubleshooting</h4>
+                    <ul>
+                        <li>If data doesn't paste: Enable debug mode and check console</li>
+                        <li>If copy fails: Ensure you're on a specific order page</li>
+                        <li>If buttons don't appear: Refresh the page</li>
+                    </ul>
+                </div>
+            </div>
+            
+            <div class="debug-info" id="debugInfo" style="display: none;">
+                <h4>Debug Information</h4>
+                <div class="debug-content" id="debugContent">
+                    <p>Debug mode is off</p>
+                </div>
+            </div>
+        </main>
+        
+        <footer>
+            <div class="version-info">
+                Version 1.0.0 by Mangan Distribution
+            </div>
+        </footer>
+    </div>
+    
+    <script src="popup.js"></script>
+</body>
+</html>

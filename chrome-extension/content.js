@@ -1,25 +1,9 @@
-// ==UserScript==
-// @name         Shopify API to MYOB
-// @namespace    http://tampermonkey.net/
-// @version      3.1
-// @description  Fetch customer data from Shopify orders and paste to MYOB
-// @author       You
-// @match        https://admin.shopify.com/*
-// @match        https://*.myob.com/*
-// @grant        GM_setValue
-// @grant        GM_getValue
-// @run-at       document-idle
-// @updateURL    https://raw.githubusercontent.com/tmm22/shopify-myob/main/shopify-myob.js
-// @downloadURL  https://raw.githubusercontent.com/tmm22/shopify-myob/main/shopify-myob.js
-// ==/UserScript==
-
 (function() {
     'use strict';
 
     // =========================================================
     // CONFIGURATION
     // =========================================================
-    let DEBUG = false; // Set to true to enable console logging
     const STORAGE_KEY = 'customerData';
     
     // Timing constants (in milliseconds)
@@ -33,9 +17,10 @@
     };
 
     // Helper for conditional logging
+    let DEBUG = false;
     const log = (...args) => { if (DEBUG) console.log('[Shopify-MYOB]', ...args); };
 
-    // Check debug mode from Chrome storage if available
+    // Check debug mode from session storage if available
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.session) {
         chrome.storage.session.get(['debugMode'], (result) => {
             DEBUG = result.debugMode || false;
@@ -47,23 +32,42 @@
     const isMYOB = window.location.hostname.includes('myob');
 
     // =========================================================
+    // DATA MIGRATION
+    // =========================================================
+    function migrateLegacyData() {
+        chrome.storage.local.get(['savedCustomerData'], (result) => {
+            const legacyData = result.savedCustomerData;
+            if (legacyData) {
+                try {
+                    const parsed = typeof legacyData === 'string' ? JSON.parse(legacyData) : legacyData;
+                    chrome.storage.local.set({ [STORAGE_KEY]: parsed });
+                    chrome.storage.local.remove('savedCustomerData');
+                    log('Migrated legacy data to new format');
+                } catch (err) {
+                    log('Failed to migrate legacy data:', err);
+                }
+            }
+        });
+    }
+
+    // Call migration at startup
+    migrateLegacyData();
+
+    // =========================================================
     // PART A: SHOPIFY (Fetch Data via JSON)
     // =========================================================
     if (isShopify) {
         // Only show button if we are potentially on an order page
-        // (You might want to refine this check based on your specific URL structure)
         if (window.location.href.includes('/orders/')) {
             addFloatingButton('Copy Address (API)', async () => {
                 try {
                     // 1. Construct the JSON URL
-                    // Removes query parameters (like ?sort=...) and adds .json
                     let jsonUrl = window.location.href.split('?')[0];
                     if (!jsonUrl.endsWith('.json')) {
                         jsonUrl += '.json';
                     }
 
                     // 2. Fetch the data
-                    // Since you are logged in, the browser sends your cookies automatically
                     const response = await fetch(jsonUrl);
 
                     if (!response.ok) {
@@ -73,7 +77,6 @@
                     const data = await response.json();
 
                     // 3. Extract data safely
-                    // The structure is usually { order: { shipping_address: { ... } } }
                     if (!data.order || !data.order.shipping_address) {
                         alert('No shipping address found in this order data.');
                         return;
@@ -110,8 +113,8 @@
                         }
                     };
 
-                    // 4. Save to storage
-                    GM_setValue(STORAGE_KEY, addressData);
+                    // 4. Save to Chrome storage
+                    chrome.storage.local.set({ [STORAGE_KEY]: addressData });
                     
                     const billingAddr = `${addressData.billing.street}${addressData.billing.street2 ? ' ' + addressData.billing.street2 : ''}\n${addressData.billing.city}, ${addressData.billing.state} ${addressData.billing.zip}`;
                     const shippingAddr = `${addressData.shipping.street}${addressData.shipping.street2 ? ' ' + addressData.shipping.street2 : ''}\n${addressData.shipping.city}, ${addressData.shipping.state} ${addressData.shipping.zip}`;
@@ -131,122 +134,124 @@
     // =========================================================
     if (isMYOB) {
         const pasteHandler = () => {
-            const address = GM_getValue(STORAGE_KEY);
-            if (!address) {
-                alert('No address found in storage. Please copy an address from Shopify first.');
-                return;
-            }
-
-            // Validate required properties exist
-            if (!address || !address.billing || !address.shipping) {
-                alert('Error reading stored data. Please copy the address from Shopify again.');
-                log('Invalid data structure:', address);
-                return;
-            }
-
-            // Split name into first/last for MYOB
-            const nameParts = (address.name || '').split(' ');
-            const firstName = nameParts[0] || '';
-            const lastName = nameParts.slice(1).join(' ') || nameParts[0] || '';
-
-            // MYOB Create Customer dialog fields
-            setInput('input[name="firstName"]', firstName);
-            setInput('input[name="lastName"]', lastName);
-
-            // Expand both Billing and Shipping address accordions
-            const accordions = document.querySelectorAll('[data-flx-comp="Accordion"]');
-            accordions.forEach(accordion => {
-                const heading = accordion.querySelector('[data-flx-comp="Heading"]');
-                if (heading && (heading.textContent.includes('Billing address') || heading.textContent.includes('Shipping address'))) {
-                    const toggleBtn = accordion.querySelector('button[aria-expanded]');
-                    if (toggleBtn && toggleBtn.getAttribute('aria-expanded') === 'false') {
-                        toggleBtn.click();
-                    }
-                }
-            });
-
-            // Wait for accordions to expand, then fill fields
-            setTimeout(() => {
-                const dialog = document.querySelector('dialog[open]');
-                if (!dialog) {
-                    log('No open dialog found');
+            chrome.storage.local.get([STORAGE_KEY], (result) => {
+                const address = result[STORAGE_KEY];
+                if (!address) {
+                    alert('No address found in storage. Please copy an address from Shopify first.');
                     return;
                 }
 
-                // Get all inputs by name - billing comes first (index 0), shipping second (index 1)
-                const streetInputs = Array.from(dialog.querySelectorAll('input[name="street"]'));
-                const cityInputs = Array.from(dialog.querySelectorAll('input[name="city"]'));
-                const stateInputs = Array.from(dialog.querySelectorAll('input[name="state"]'));
-                const postcodeInputs = Array.from(dialog.querySelectorAll('input[name="postcode"]'));
-                const phoneInputs = Array.from(dialog.querySelectorAll('[class*="PhoneNumberList"] input'));
+                // Validate required properties exist
+                if (!address || !address.billing || !address.shipping) {
+                    alert('Error reading stored data. Please copy the address from Shopify again.');
+                    log('Invalid data structure:', address);
+                    return;
+                }
 
-                log('Found inputs:', {
-                    street: streetInputs.length,
-                    city: cityInputs.length,
-                    state: stateInputs.length,
-                    postcode: postcodeInputs.length,
-                    phone: phoneInputs.length
-                });
+                // Split name into first/last for MYOB
+                const nameParts = (address.name || '').split(' ');
+                const firstName = nameParts[0] || '';
+                const lastName = nameParts.slice(1).join(' ') || nameParts[0] || '';
 
-                // Fill fields sequentially with delays to prevent React overwriting
-                const fillSequence = [
-                    // Billing
-                    [streetInputs[0], `${address.billing.street || ''} ${address.billing.street2 || ''}`.trim()],
-                    [cityInputs[0], address.billing.city || ''],
-                    [stateInputs[0], abbreviateState(address.billing.state)],
-                    [postcodeInputs[0], address.billing.zip || ''],
-                    // Shipping
-                    [streetInputs[1], `${address.shipping.street || ''} ${address.shipping.street2 || ''}`.trim()],
-                    [cityInputs[1], address.shipping.city || ''],
-                    [stateInputs[1], abbreviateState(address.shipping.state)],
-                    [postcodeInputs[1], address.shipping.zip || ''],
-                    // Phone
-                    [phoneInputs[0], address.phone || '']
-                ];
+                // MYOB Create Customer dialog fields
+                setInput('input[name="firstName"]', firstName);
+                setInput('input[name="lastName"]', lastName);
 
-                fillSequence.forEach(([el, val], index) => {
-                    if (el && val) {
-                        setTimeout(() => {
-                            el.focus();
-                            setInputEl(el, val);
-                            
-                            // For combobox fields (like state), simulate selecting from dropdown
-                            if (el.getAttribute('data-input-type') === 'combobox' || el.getAttribute('aria-autocomplete')) {
-                                setTimeout(() => {
-                                    // Press down arrow to highlight first option, then Enter to select
-                                    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, bubbles: true }));
-                                    setTimeout(() => {
-                                        el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
-                                        el.blur();
-                                    }, TIMING.COMBOBOX_ENTER_DELAY);
-                                }, TIMING.COMBOBOX_ARROW_DELAY);
-                            } else {
-                                el.blur();
-                            }
-                            log(`Filled field ${index}:`, val);
-                        }, index * TIMING.FIELD_FILL_INTERVAL);
-                    }
-                });
-
-                // Fill email LAST (after all fields are done)
-                setTimeout(() => {
-                    if (address.email) {
-                        const emailInputs = dialog.querySelectorAll('input[name="email"]');
-                        if (emailInputs[0]) {
-                            emailInputs[0].focus();
-                            emailInputs[0].value = address.email;
-                            emailInputs[0].dispatchEvent(new Event('input', { bubbles: true }));
-                            setTimeout(() => {
-                                emailInputs[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-                                emailInputs[0].dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-                                emailInputs[0].dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-                                emailInputs[0].blur();
-                                log('Email filled');
-                            }, TIMING.EMAIL_ENTER_DELAY);
+                // Expand both Billing and Shipping address accordions
+                const accordions = document.querySelectorAll('[data-flx-comp="Accordion"]');
+                accordions.forEach(accordion => {
+                    const heading = accordion.querySelector('[data-flx-comp="Heading"]');
+                    if (heading && (heading.textContent.includes('Billing address') || heading.textContent.includes('Shipping address'))) {
+                        const toggleBtn = accordion.querySelector('button[aria-expanded]');
+                        if (toggleBtn && toggleBtn.getAttribute('aria-expanded') === 'false') {
+                            toggleBtn.click();
                         }
                     }
-                }, TIMING.EMAIL_FILL_DELAY);
-            }, TIMING.ACCORDION_EXPAND);
+                });
+
+                // Wait for accordions to expand, then fill fields
+                setTimeout(() => {
+                    const dialog = document.querySelector('dialog[open]');
+                    if (!dialog) {
+                        log('No open dialog found');
+                        return;
+                    }
+
+                    // Get all inputs by name - billing comes first (index 0), shipping second (index 1)
+                    const streetInputs = Array.from(dialog.querySelectorAll('input[name="street"]'));
+                    const cityInputs = Array.from(dialog.querySelectorAll('input[name="city"]'));
+                    const stateInputs = Array.from(dialog.querySelectorAll('input[name="state"]'));
+                    const postcodeInputs = Array.from(dialog.querySelectorAll('input[name="postcode"]'));
+                    const phoneInputs = Array.from(dialog.querySelectorAll('[class*="PhoneNumberList"] input'));
+
+                    log('Found inputs:', {
+                        street: streetInputs.length,
+                        city: cityInputs.length,
+                        state: stateInputs.length,
+                        postcode: postcodeInputs.length,
+                        phone: phoneInputs.length
+                    });
+
+                    // Fill fields sequentially with delays to prevent React overwriting
+                    const fillSequence = [
+                        // Billing
+                        [streetInputs[0], `${address.billing.street || ''} ${address.billing.street2 || ''}`.trim()],
+                        [cityInputs[0], address.billing.city || ''],
+                        [stateInputs[0], abbreviateState(address.billing.state)],
+                        [postcodeInputs[0], address.billing.zip || ''],
+                        // Shipping
+                        [streetInputs[1], `${address.shipping.street || ''} ${address.shipping.street2 || ''}`.trim()],
+                        [cityInputs[1], address.shipping.city || ''],
+                        [stateInputs[1], abbreviateState(address.shipping.state)],
+                        [postcodeInputs[1], address.shipping.zip || ''],
+                        // Phone
+                        [phoneInputs[0], address.phone || '']
+                    ];
+
+                    fillSequence.forEach(([el, val], index) => {
+                        if (el && val) {
+                            setTimeout(() => {
+                                el.focus();
+                                setInputEl(el, val);
+                                
+                                // For combobox fields (like state), simulate selecting from dropdown
+                                if (el.getAttribute('data-input-type') === 'combobox' || el.getAttribute('aria-autocomplete')) {
+                                    setTimeout(() => {
+                                        // Press down arrow to highlight first option, then Enter to select
+                                        el.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40, bubbles: true }));
+                                        setTimeout(() => {
+                                            el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
+                                            el.blur();
+                                        }, TIMING.COMBOBOX_ENTER_DELAY);
+                                    }, TIMING.COMBOBOX_ARROW_DELAY);
+                                } else {
+                                    el.blur();
+                                }
+                                log(`Filled field ${index}:`, val);
+                            }, index * TIMING.FIELD_FILL_INTERVAL);
+                        }
+                    });
+
+                    // Fill email LAST (after all fields are done)
+                    setTimeout(() => {
+                        if (address.email) {
+                            const emailInputs = dialog.querySelectorAll('input[name="email"]');
+                            if (emailInputs[0]) {
+                                emailInputs[0].focus();
+                                emailInputs[0].value = address.email;
+                                emailInputs[0].dispatchEvent(new Event('input', { bubbles: true }));
+                                setTimeout(() => {
+                                    emailInputs[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+                                    emailInputs[0].dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+                                    emailInputs[0].dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+                                    emailInputs[0].blur();
+                                    log('Email filled');
+                                }, TIMING.EMAIL_ENTER_DELAY);
+                            }
+                        }
+                    }, TIMING.EMAIL_FILL_DELAY);
+                }, TIMING.ACCORDION_EXPAND);
+            });
         };
 
         // Watch for dialogs opening and add button inside them (not on main page)
@@ -272,26 +277,6 @@
 
         observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['open'] });
     }
-
-    // =========================================================
-    // DATA MIGRATION
-    // =========================================================
-    function migrateLegacyData() {
-        const legacyData = GM_getValue('savedCustomerData');
-        if (legacyData) {
-            try {
-                const parsed = typeof legacyData === 'string' ? JSON.parse(legacyData) : legacyData;
-                GM_setValue(STORAGE_KEY, parsed);
-                GM_deleteValue('savedCustomerData');
-                log('Migrated legacy data to new format');
-            } catch (err) {
-                log('Failed to migrate legacy data:', err);
-            }
-        }
-    }
-    
-    // Call migration at startup
-    migrateLegacyData();
 
     // =========================================================
     // HELPER FUNCTIONS
